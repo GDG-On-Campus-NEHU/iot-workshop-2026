@@ -1,19 +1,10 @@
-/*******************************************************************************
- * Copyright (c) 2026 Subhojit Baidya
- * Distributed under the MIT License
- *******************************************************************************/
-
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h> // Ensure "ArduinoJson" by Benoit Blanchon is installed
-
 // WiFi Configuration Settings
-const char* ssid = "Virtus";
-const char* password = "wowcownow";
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 // ThingsBoard Setup
-const char* mqtt_server = "mqtt.eu.thingsboard.cloud";
-const char* token = "9nf2hajt560chxl3yqxh";
+const char* mqtt_server = "mqtt.thingsboard.cloud"; // Using global cloud endpoint
+const char* token = "YOUR_THINGSBOARD_TOKEN";
 
 #define RELAY_PIN D1
 
