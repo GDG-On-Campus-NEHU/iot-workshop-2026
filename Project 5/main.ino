@@ -1,123 +1,135 @@
+/*******************************************************************************
+ * Copyright (c) 2026 Subhojit Baidya
+ * Distributed under the MIT License
+ *******************************************************************************/
+
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
-#include <DHT.h>
+#include <ArduinoJson.h> // Ensure "ArduinoJson" by Benoit Blanchon is installed
 
 // WiFi Configuration Settings
-const char* ssid = "YOUR_WIFI_SSID";          // SENSITIVE INFO REMOVED: Place your Wi-Fi SSID here
-const char* password = "YOUR_WIFI_PASSWORD";  // SENSITIVE INFO REMOVED: Place your Wi-Fi Password here
+const char* ssid = "Virtus";
+const char* password = "wowcownow";
 
-// ThingsBoard Cloud MQTT Broker Configuration
+// ThingsBoard Setup
 const char* mqtt_server = "mqtt.eu.thingsboard.cloud";
-const char* token = "YOUR_THINGSBOARD_TOKEN";  // SENSITIVE INFO REMOVED: Place your Device Access Token here
+const char* token = "9nf2hajt560chxl3yqxh";
 
-// Hardware Pin Definitions
-#define SOIL_PIN A0    // Analog pin for Soil Moisture Sensor
-#define RELAY_PIN D1   // Digital pin controlling the Water Pump Relay
-#define DHTPIN D2      // Digital pin connected to the DHT11 Data line
-#define DHTTYPE DHT11  // Specifying the DHT variant (DHT11)
+#define RELAY_PIN D1
 
-// Initialize DHT Sensor instance
-DHT dht(DHTPIN, DHTTYPE);
-
-// Initialize Network and MQTT Client instances
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// Calibration: Adjust based on your specific sensor baseline (Dry vs Wet analog bounds)
-int soilThreshold = 600;
+// Tracks the current state of the relay for telemetry reporting
+bool relayState = false;
+
+unsigned long lastTelemetryTime = 0;
+const unsigned long telemetryInterval = 3000; // Report status every 3 seconds
 
 void setup() {
-  // Initialize hardware serial communication for local diagnostics
   Serial.begin(115200);
 
-  // Configure Relay Pin as output and turn it off immediately (Active Low Configuration)
+  // Set relay pin as output and turn it OFF immediately on startup
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // Logic HIGH breaks circuit = Relay OFF
+  digitalWrite(RELAY_PIN, HIGH); // Active-Low: HIGH means OFF
 
-  // Initialize the DHT sensor array
-  dht.begin();
-
-  // Initiate Wi-Fi Connection sequence
+  // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWi-Fi Connected!");
-  Serial.print("Local IP Address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println("\nWiFi Connected!");
 
-  // Configure the MQTT Client properties
   client.setServer(mqtt_server, 1883);
+  client.setCallback(mqttCallback);
+}
+
+/**
+ * Intercepts incoming RPC commands from the ThingsBoard Dashboard
+ */
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("\n[RPC Command Received] Topic: ");
+  Serial.println(topic);
+
+  // Convert payload byte array to String
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.print("Payload: ");
+  Serial.println(message);
+
+  // Parse incoming JSON
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, message);
+  if (error) {
+    Serial.print("JSON Parse Failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  const char* method = doc["method"];
+
+  if (method != NULL && strcmp(method, "setPumpState") == 0) {
+    // Get the boolean value sent by the dashboard switch (true/false)
+    bool targetState = doc["params"].as<bool>();
+
+    if (targetState == true) {
+      // Turn relay ON (Active-Low needs LOW voltage)
+      digitalWrite(RELAY_PIN, LOW);
+      relayState = true;
+      Serial.println(">> RELAY TRIGGERED: ON <<");
+    } else {
+      // Turn relay OFF (Active-Low needs HIGH voltage)
+      digitalWrite(RELAY_PIN, HIGH);
+      relayState = false;
+      Serial.println(">> RELAY TRIGGERED: OFF <<");
+    }
+
+    // Send acknowledgement back to ThingsBoard to confirm execution
+    String topicStr = String(topic);
+    if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
+      String requestId = topicStr.substring(26);
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+
+      String responsePayload = "{\"relayState\":" + String(relayState ? "true" : "false") + "}";
+      client.publish(responseTopic.c_str(), responsePayload.c_str());
+    }
+  }
 }
 
 void reconnect() {
-  // Loop until a stable MQTT session is re-established
   while (!client.connected()) {
-    Serial.print("Attempting ThingsBoard MQTT connection...");
-
-    // Connect using the token as both ClientID and Username (ThingsBoard standard specification)
+    Serial.print("Connecting to ThingsBoard Server...");
     if (client.connect(token, token, NULL)) {
-      Serial.println("Connected to ThingsBoard!");
+      Serial.println(" Connected!");
+
+      // Subscribe to server-side RPC command topic
+      client.subscribe("v1/devices/me/rpc/request/+");
+      Serial.println("Subscribed to RPC Channel.");
     } else {
-      Serial.print("Failed connection, rc=");
+      Serial.print("Failed, rc=");
       Serial.print(client.state());
-      Serial.println(" -> Retrying in 2 seconds...");
-      delay(2000);
+      Serial.println(" -> Retrying in 5 seconds...");
+      delay(5000);
     }
   }
 }
 
 void loop() {
-  // Guard clause ensuring network telemetry persistence
   if (!client.connected()) reconnect();
   client.loop();
 
-  // Read raw ambient data from soil and environmental sensor units
-  int soilValue = analogRead(SOIL_PIN);
-  float temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+  // Constantly report back the current relay state to the dashboard
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastTelemetryTime >= telemetryInterval) {
+    lastTelemetryTime = currentMillis;
 
-  // Validate integrity of sensor data packets
-  if (isnan(temp) || isnan(hum)) {
-    Serial.println("DHT Sensor Read Error: Check hardware connections.");
-    return;
+    String payload = "{\"pumpStatus\":" + String(relayState ? "true" : "false") + "}";
+    client.publish("v1/devices/me/telemetry", payload.c_str());
+    Serial.print("Sent Status Telemetry: ");
+    Serial.println(payload);
   }
-
-  // Automatic Local Irrigation Control Logic
-  bool pumpState;
-  if (soilValue > soilThreshold) {
-    // Value goes up when soil gets dry -> Turn pump ON (Active Low)
-    digitalWrite(RELAY_PIN, LOW);
-    pumpState = true;
-  } else {
-    // Soil moisture content is acceptable -> Keep pump OFF
-    digitalWrite(RELAY_PIN, HIGH);
-    pumpState = false;
-  }
-
-  // Serialize telemetry properties into raw JSON payload format
-  String payload = "{";
-  payload += "\"soil\":";
-  payload += soilValue;
-  payload += ",";
-  payload += "\"temperature\":";
-  payload += temp;
-  payload += ",";
-  payload += "\"humidity\":";
-  payload += hum;
-  payload += ",";
-  payload += "\"pump\":";
-  payload += pumpState ? "true" : "false";
-  payload += "}";
-
-  // Publish telemetry packet string to the required ThingsBoard device topic path
-  client.publish("v1/devices/me/telemetry", payload.c_str());
-
-  // Print mirrored payload output string to local console line
-  Serial.println(payload);
-
-  // Polling rate pacing interval (5-second delay cycles)
-  delay(5000);
 }
