@@ -1,14 +1,14 @@
 # IoT Workshop Code Repository
 
-This repository contains the Arduino sketches used in the IoT workshop. Each folder is a separate project that demonstrates a common ESP8266 + ThingsBoard use case such as sensor monitoring, motion detection, parking assistance, and relay control.
+This repository contains the Arduino sketches used in the IoT workshop. Each folder is a separate project that demonstrates ESP8266 use cases such as sensor monitoring, motion detection, parking assistance, and relay control.
 
-The code is written for a NodeMCU ESP8266 board and is intentionally beginner-friendly: each sketch includes serial output, clear pin definitions, and telemetry examples for ThingsBoard.
+The code is written for a NodeMCU ESP8266 board and is intentionally beginner-friendly: each sketch includes serial output and clear pin definitions. Project 1 focuses only on local hardware behavior, while later projects include ThingsBoard telemetry.
 
 ## What’s in This Repo
 
 | Project | Purpose | Main Hardware |
 | --- | --- | --- |
-| Project 1 | LDR-based light detection with LED telemetry | LDR, LED |
+| Project 1 | LDR-based light detection with local LED control | LDR, LED |
 | Project 2 | Temperature and humidity monitoring | DHT11 |
 | Project 3 | Motion detection alarm | PIR sensor, buzzer |
 | Project 4 | Smart parking assistant | HC-SR04 ultrasonic sensor, 2 LEDs |
@@ -32,9 +32,9 @@ Install these tools and libraries in Arduino IDE:
 
 You will also need:
 
-- A Wi-Fi network name and password
-- A ThingsBoard Cloud account
-- A ThingsBoard device access token for each sketch you want to run
+- A Wi-Fi network name and password (Projects 2-5)
+- A ThingsBoard Cloud account (Projects 2-5)
+- A ThingsBoard device access token for each cloud-enabled sketch (Projects 2-5)
 
 ## Common Workshop Setup
 
@@ -42,12 +42,12 @@ You will also need:
 2. Install the required libraries listed above.
 3. Select the correct board, usually `NodeMCU 1.0 (ESP-12E Module)`.
 4. Select the correct serial port.
-5. Replace the placeholder Wi-Fi credentials in the sketch.
-6. Replace the ThingsBoard token with your device token.
+5. Replace the placeholder Wi-Fi credentials in the sketch if required.
+6. Replace the ThingsBoard token with your device token if required.
 7. Upload the sketch to the board.
 8. Open Serial Monitor at `115200 baud` to see status messages.
 
-## ThingsBoard Notes
+## ThingsBoard Notes (Projects 2-5)
 
 - Most sketches publish telemetry to `v1/devices/me/telemetry`.
 - ThingsBoard expects the device access token as the MQTT username.
@@ -58,7 +58,7 @@ You will also need:
 
 The diagrams below are beginner-friendly wiring diagrams for breadboard assembly. They show the required connections clearly, but exact breadboard placement can vary depending on the sensor module you use.
 
-### Project 1 - LDR Light Sensor with LED Telemetry
+### Project 1 - LDR Light Sensor with Local LED Control
 
 ```mermaid
 flowchart LR
@@ -171,9 +171,9 @@ flowchart LR
 	RELAY --> GND
 ```
 
-## Project 1 - LDR Light Sensor with LED Telemetry
+## Project 1 - LDR Light Sensor with Local LED Control
 
-This sketch reads an LDR, turns an LED on when the environment gets dark, and sends both values to ThingsBoard.
+This sketch reads an LDR, turns an LED on when the environment gets dark, and prints the readings/status to Serial Monitor.
 
 ### Wiring
 
@@ -187,12 +187,10 @@ This sketch reads an LDR, turns an LED on when the environment gets dark, and se
 
 - Reads the LDR value every second.
 - Turns the LED on when the light level crosses the darkness threshold.
-- Sends telemetry in the form of `{"led":1,"ldr":<value>}` or `{"led":0,"ldr":<value>}`.
+- Sends the LDR reading and LED status to UART (Serial Monitor).
 
 ### Important Settings
 
-- Wi-Fi credentials: `WIFI_SSID`, `WIFI_PASSWORD`
-- ThingsBoard token: `TOKEN`
 - Darkness threshold: `threshold = 700`
 
 ## Project 2 - DHT11 Temperature and Humidity Monitor
@@ -356,7 +354,6 @@ flowchart LR
 
 You can use these payload formats as a reference when building widgets or dashboards:
 
-- Project 1: `{"led":1,"ldr":742}`
 - Project 2: `{"temperature":26.1,"humidity":58.7}`
 - Project 3: `{"motion":1}`
 - Project 4: `{"distance":18.4,"status":"OCCUPIED"}`
