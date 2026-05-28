@@ -1,36 +1,39 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h> // Ensure "ArduinoJson" by Benoit Blanchon is installed
+#include <DHT.h>
+#include <ArduinoJson.h> // REQUIRED: Install "ArduinoJson" by Benoit Blanchon via Library Manager
 
-// WiFi Configuration Settings
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
-
-// ThingsBoard Setup
-const char* mqtt_server = "mqtt.thingsboard.cloud"; // Using global cloud endpoint
+const char* mqtt_server = "mqtt.thingsboard.cloud";
 const char* token = "YOUR_THINGSBOARD_TOKEN";
 
+#define SOIL_PIN A0
 #define RELAY_PIN D1
+#define DHTPIN D2
+#define DHTTYPE DHT11
 
+DHT dht(DHTPIN, DHTTYPE);
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// Tracks the current state of the relay for telemetry reporting
-bool relayState = false;
+int soilThreshold = 600;
 
+// OVERRIDE VARIABLES FOR RPC
+bool cloudOverrideActive = false;
+bool cloudPumpState = false;
+
+// Non-blocking telemetry timer variables
 unsigned long lastTelemetryTime = 0;
-const unsigned long telemetryInterval = 3000; // Report status every 3 seconds
+const unsigned long telemetryInterval = 5000;
 
 void setup() {
   Serial.begin(115200);
-
-  // Set relay pin as output and turn it OFF immediately on startup
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // Active-Low: HIGH means OFF
+  digitalWrite(RELAY_PIN, HIGH); // Default: Relay OFF (Active Low)
 
-  // Connect to Wi-Fi
+  dht.begin();
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -42,13 +45,12 @@ void setup() {
 }
 
 /**
- * Intercepts incoming RPC commands from the ThingsBoard Dashboard
+ * MQTT Callback Routine: Intercepts downstream server RPC requests
  */
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("\n[RPC Command Received] Topic: ");
+  Serial.print("\n[RPC Received] On Topic: ");
   Serial.println(topic);
 
-  // Convert payload byte array to String
   String message = "";
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
@@ -56,59 +58,49 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Payload: ");
   Serial.println(message);
 
-  // Parse incoming JSON
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
   if (error) {
-    Serial.print("JSON Parse Failed: ");
+    Serial.print("JSON Parsing Failed: ");
     Serial.println(error.c_str());
     return;
   }
 
   const char* method = doc["method"];
 
-  if (method != NULL && strcmp(method, "setPumpState") == 0) {
-    // Get the boolean value sent by the dashboard switch (true/false)
-    bool targetState = doc["params"].as<bool>();
-
-    if (targetState == true) {
-      // Turn relay ON (Active-Low needs LOW voltage)
-      digitalWrite(RELAY_PIN, LOW);
-      relayState = true;
-      Serial.println(">> RELAY TRIGGERED: ON <<");
-    } else {
-      // Turn relay OFF (Active-Low needs HIGH voltage)
-      digitalWrite(RELAY_PIN, HIGH);
-      relayState = false;
-      Serial.println(">> RELAY TRIGGERED: OFF <<");
+  if (method != NULL) {
+    if (strcmp(method, "setPumpState") == 0) {
+      cloudOverrideActive = true;
+      cloudPumpState = doc["params"].as<bool>();
+      Serial.print("Cloud Override Engaged! Targeted Pump State: ");
+      Serial.println(cloudPumpState ? "ON" : "OFF");
     }
-
-    // Send acknowledgement back to ThingsBoard to confirm execution
-    String topicStr = String(topic);
-    if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
-      String requestId = topicStr.substring(26);
-      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-
-      String responsePayload = "{\"relayState\":" + String(relayState ? "true" : "false") + "}";
-      client.publish(responseTopic.c_str(), responsePayload.c_str());
+    else if (strcmp(method, "releaseControl") == 0) {
+      cloudOverrideActive = false;
+      Serial.println("Cloud Override Disengaged. Reverting to local automatic automation.");
     }
+  }
+
+  String topicStr = String(topic);
+  if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
+    String requestId = topicStr.substring(26);
+    String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+    String responsePayload = "{\"success\":true,\"overrideActive\":" + String(cloudOverrideActive ? "true" : "false") + "}";
+    client.publish(responseTopic.c_str(), responsePayload.c_str());
   }
 }
 
 void reconnect() {
   while (!client.connected()) {
-    Serial.print("Connecting to ThingsBoard Server...");
+    Serial.print("Attempting ThingsBoard MQTT connection...");
     if (client.connect(token, token, NULL)) {
-      Serial.println(" Connected!");
-
-      // Subscribe to server-side RPC command topic
+      Serial.println("Connected!");
       client.subscribe("v1/devices/me/rpc/request/+");
-      Serial.println("Subscribed to RPC Channel.");
+      Serial.println("Subscribed to Server-Side RPC channel.");
     } else {
       Serial.print("Failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" -> Retrying in 5 seconds...");
-      delay(5000);
+      Serial.println(client.state());
+      delay(2000);
     }
   }
 }
@@ -117,14 +109,44 @@ void loop() {
   if (!client.connected()) reconnect();
   client.loop();
 
-  // Constantly report back the current relay state to the dashboard
+  int soilValue = analogRead(SOIL_PIN);
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+  bool activePumpState;
+
+  if (cloudOverrideActive) {
+    digitalWrite(RELAY_PIN, cloudPumpState ? LOW : HIGH);
+    activePumpState = cloudPumpState;
+  }
+  else {
+    if (soilValue > soilThreshold) {
+      digitalWrite(RELAY_PIN, LOW);
+      activePumpState = true;
+    } else {
+      digitalWrite(RELAY_PIN, HIGH);
+      activePumpState = false;
+    }
+  }
+
   unsigned long currentMillis = millis();
   if (currentMillis - lastTelemetryTime >= telemetryInterval) {
     lastTelemetryTime = currentMillis;
 
-    String payload = "{\"pumpStatus\":" + String(relayState ? "true" : "false") + "}";
+    if (isnan(temp) || isnan(hum)) {
+      Serial.println("DHT Sensor Read Error!");
+      return;
+    }
+
+    String payload = "{";
+    payload += "\"soil\":"; payload += soilValue; payload += ",";
+    payload += "\"temperature\":"; payload += temp; payload += ",";
+    payload += "\"humidity\":"; payload += hum; payload += ",";
+    payload += "\"pump\":"; payload += activePumpState ? "true" : "false"; payload += ",";
+    payload += "\"override\":"; payload += cloudOverrideActive ? "true" : "false";
+    payload += "}";
+
     client.publish("v1/devices/me/telemetry", payload.c_str());
-    Serial.print("Sent Status Telemetry: ");
     Serial.println(payload);
   }
 }
