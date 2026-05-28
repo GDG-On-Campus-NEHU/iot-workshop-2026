@@ -1,3 +1,7 @@
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h> // Ensure "ArduinoJson" by Benoit Blanchon is installed
+
 // WiFi Configuration Settings
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
