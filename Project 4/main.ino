@@ -1,17 +1,20 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-// WiFi and MQTT Credentials Setup
+// WiFi Configuration Setup
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
-const char* mqtt_server = "broker.hivemq.com";
-const char* mqtt_topic = "yourunique/parking/status"; // Change this to be unique!
 
-// Pin Definitions
+// ThingsBoard Cloud MQTT Broker Configuration
+const char* mqtt_server = "mqtt.eu.thingsboard.cloud"; // Alter server if using thingsboard.cloud global region
+const char* token = "YOUR_THINGSBOARD_TOKEN";          // Device Access Token acting as MQTT credentials
+const char* mqtt_topic = "v1/devices/me/telemetry";    // Strict ThingsBoard endpoint path
+
+// Pin Definitions (Direct GPIO mapping indices)
 const int trigPin = 5;   // D1 on NodeMCU
 const int echoPin = 4;   // D2 on NodeMCU
 const int greenLed = 14; // D5 on NodeMCU
-const int redLed = 12;   // D6 on NodeMCU (Double-check if your red wire is on D6 or D7!)
+const int redLed = 12;   // D6 on NodeMCU
 
 // Parking Threshold (in centimeters)
 const int PARKING_THRESHOLD = 20;
@@ -21,9 +24,9 @@ long duration;
 float distanceCm;
 String currentStatus = "UNKNOWN";
 
-// Non-blocking timer for MQTT publishing (every 2 seconds)
+// Non-blocking timer for ThingsBoard telemetry intervals (every 2.5 seconds)
 unsigned long lastMqttPublish = 0;
-const long publishInterval = 2000;
+const long publishInterval = 2500;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -46,17 +49,15 @@ void setup_wifi() {
 
 void reconnect() {
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection to broker...");
-    // Generate a random client ID to prevent collision on the public broker
-    String clientId = "NodeMCU-ParkingSensor-";
-    clientId += String(random(0, 0xffff), HEX);
+    Serial.print("Attempting MQTT connection to ThingsBoard Server...");
 
-    if (client.connect(clientId.c_str())) {
-      Serial.println(" connected!");
+    // THINGSBOARD PROTOCOL REQUIREMENT: Token passes as username, password remains NULL
+    if (client.connect(token, token, NULL)) {
+      Serial.println(" successfully authenticated and connected!");
     } else {
-      Serial.print(" failed, rc=");
+      Serial.print(" authentication failed, rc=");
       Serial.print(client.state());
-      Serial.println(" -> Retrying connection in 5 seconds...");
+      Serial.println(" -> Retrying interface in 5 seconds...");
       delay(5000);
     }
   }
@@ -65,11 +66,11 @@ void reconnect() {
 void setup() {
   // Initialize Serial Monitor for debugging
   Serial.begin(115200);
-  Serial.println("\n--- Smart Ultrasonic Parking Assistant (MQTT Enabled) ---");
+  Serial.println("\n--- Smart Ultrasonic Parking Assistant (ThingsBoard Configured) ---");
 
   // Define pin modes
   pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT); // If keeping no resistors, you can change this to INPUT_PULLUP
+  pinMode(echoPin, INPUT); // Change to INPUT_PULLUP if bypassing resistors for raw diagnostics
   pinMode(greenLed, OUTPUT);
   pinMode(redLed, OUTPUT);
 
@@ -86,7 +87,7 @@ void setup() {
 }
 
 void loop() {
-  // Ensure we maintain a solid connection to the MQTT broker
+  // Ensure we maintain a solid connection to the ThingsBoard broker
   if (!client.connected()) {
     reconnect();
   }
@@ -140,20 +141,27 @@ void loop() {
     currentStatus = "AVAILABLE";
   }
 
-  // 6. Non-blocking MQTT Data Transmission
+  // 6. Non-blocking ThingsBoard Telemetry Data Transmission
   unsigned long currentMillis = millis();
   if (currentMillis - lastMqttPublish >= publishInterval) {
     lastMqttPublish = currentMillis;
 
-    // Create a data payload string combining the distance and state
-    String payload = "{\"distance\":" + String(distanceCm, 1) + ",\"status\":\"" + currentStatus + "\"}";
+    // Create a strict JSON data payload matching ThingsBoard attributes schema
+    String payload = "{";
+    payload += "\"distance\";";
+    payload += String(distanceCm, 1);
+    payload += ",";
+    payload += "\"status\":\"";
+    payload += currentStatus;
+    payload += "\"";
+    payload += "}";
 
-    // Publish payload to cloud broker
+    // Publish telemetry payload to cloud broker endpoint
     if (client.publish(mqtt_topic, payload.c_str())) {
-      Serial.print(">> Cloud Telemetry Streamed: ");
+      Serial.print(">> ThingsBoard Telemetry Streamed: ");
       Serial.println(payload);
     } else {
-      Serial.println(">> Cloud Telemetry stream failed.");
+      Serial.println(">> ThingsBoard transmission packet dropped.");
     }
   }
 
