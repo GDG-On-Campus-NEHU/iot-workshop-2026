@@ -1,5 +1,5 @@
 /**
- * @file Project 1/main.ino
+ * @file Project 2/main.ino
  * @brief IoT Environmental Monitoring via ThingsBoard MQTT
  * * DESCRIPTION:
  * This firmware connects an ESP8266 microcontroller to a local Wi-Fi network and
